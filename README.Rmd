@@ -1,0 +1,109 @@
+---
+title: "README"
+output: rmarkdown::github_document
+---
+
+```{r setup, include=FALSE}
+
+library(dplyr)
+library(tidytext)
+library(readr)
+library(topicmodels)
+library(NLP)
+library(tidytext)
+library(stringr)
+library(tidyr)
+library(ggplot2)
+library(tidyverse)
+library(text2vec)
+library(LDAvis)
+
+twitters=read_csv("gun.tweets.csv",col_types = cols(.default = col_character())) %>% as.tbl()
+#dim(twitters)
+
+twitters_wenhao = cbind(twitters,c(1:nrow(twitters)))
+colnames(twitters_wenhao)[90] = "TweetIndex"
+
+twitters_wenhao$text=sapply(twitters_wenhao$text,function(row) iconv(row, "latin1", "ASCII", sub=""))
+
+
+cleantext <- function(tx){
+  tx= gsub("htt.{1,20}", " ", tx, ignore.case=TRUE)
+  tx = gsub("[^#[:^punct:]]|@", " ", tx, perl=TRUE, ignore.case=TRUE)
+  tx = gsub("[[:digit:]]", " ", tx, ignore.case=TRUE)
+  tx = gsub(" {1,}", " ", tx, ignore.case=TRUE)
+  tx = gsub("^\\s+|\\s+$", " ", tx, ignore.case=TRUE)
+  return(tx)
+}
+twitters_wenhao$text=lapply(twitters_wenhao$text, cleantext)
+
+stop_words=rbind(stop_words,c("rt",""),c("amp",""),c("iphone",""),c("android",""),
+                 c("twitter",""),c("<U",""),c("0e",""),c("rt",""),c("web",""),c("client",""),c("ipad",""))
+#twitters$text=str_replace_all(twitters$text,"^suppo$","support")
+
+#head(twitters$text)
+cleaned_wenhao=twitters_wenhao  %>% 
+  select(text,TweetIndex) %>% 
+  unnest_tokens(word,text) %>% 
+  anti_join(stop_words) %>%
+  group_by(word)%>%
+  filter(n()>20)%>%
+  filter(str_length(word)>2)%>%
+  ungroup()
+
+#############
+
+
+it = itoken(cleaned_wenhao$word, ids = cleaned_wenhao$TweetIndex, progressbar = FALSE)
+v = create_vocabulary(it) %>% 
+  prune_vocabulary(term_count_min = 10, doc_proportion_max = 0.2)
+vectorizer = vocab_vectorizer(v)
+dtm = create_dtm(it, vectorizer, type = "dgTMatrix")
+
+lda_model = LDA$new(n_topics = 10, doc_topic_prior = 0.1, topic_word_prior = 0.01)
+doc_topic_distr = 
+  lda_model$fit_transform(x = dtm, n_iter = 124, 
+                          control = list(seed = 1012),
+                          convergence_tol = 0.0001, n_check_convergence = 25, 
+                          progressbar = FALSE)
+lda_model$plot()  
+#####################
+
+theme_set(theme_bw())
+
+cleaned_wenhao1=twitters_wenhao  %>% 
+  select(text,TweetIndex) %>% 
+  unnest_tokens(word,text) %>% 
+  anti_join(stop_words) %>%
+  group_by(word)%>%
+  filter(n()>3000)%>%
+  ungroup()
+
+twitters_t1 <- cleaned_wenhao1 %>%
+  count(TweetIndex,word, sort = TRUE) %>%
+  ungroup()
+
+t_dtm1 <- twitters_t1 %>%
+  cast_dtm(TweetIndex,word, n)
+ap_lda1 <- LDA(t_dtm1, k = 2, control = list(seed = 1234))
+ap_topics1 <- tidy(ap_lda1, matrix = "beta")
+
+beta_spread1 <- ap_topics1 %>%
+  mutate(topic = paste0("topic", topic)) %>%
+  spread(topic, beta) %>%
+  filter(topic1 > .001 | topic2 > .001) %>%
+  mutate(log_ratio = log2(topic2 / topic1))
+
+beta_top_terms1 = beta_spread1 %>%
+  mutate(position = ifelse(log_ratio< 0, "below", "above"))%>%
+  mutate(term = reorder(term, log_ratio)) %>%
+  ggplot(aes(x=term, y=log_ratio,color = position),fill=cond) + 
+  geom_bar(stat = "identity",width = 0.5) +
+  scale_color_manual(name="Type", 
+                     labels = c("Above","Below"), 
+                     values = c("below" = "#00ba38", "above" = "#f8766d")) + 
+  labs(title="Log_ratio of most frequent terms") + 
+  ylim(-4, 4) +
+  coord_flip()
+beta_top_terms1
+
